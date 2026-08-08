@@ -19,6 +19,11 @@ This repository contains an n8n workflow that triggers when a new invoice PDF is
 4. Choose the database type by editing the `databaseType` field in the `Prepare Invoice Prompt` node to either `postgres` or `airtable`.
 5. Enable and activate the workflow.
 
+## Workflow files
+
+- `invoice-pdf-processor-workflow.json`: Original n8n export.
+- `invoice-pdf-processor-workflow.yaml`: Runnable YAML version for n8n import or version control.
+
 ## Behavior
 
 - Watches a Google Drive folder for new invoice PDFs.
