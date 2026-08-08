@@ -1,0 +1,386 @@
+{
+  "name": "Invoice PDF Processor",
+  "active": false,
+  "nodes": [
+    {
+      "parameters": {
+        "folderId": "YOUR_GOOGLE_DRIVE_FOLDER_ID",
+        "watchFor": "new",
+        "resource": "file"
+      },
+      "name": "Google Drive Trigger",
+      "type": "n8n-nodes-base.googleDriveTrigger",
+      "typeVersion": 1,
+      "position": [250, 150],
+      "credentials": {
+        "googleDriveOAuth2": "Google Drive Account"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "download",
+        "fileId": "={{$json[\"id\"]}}",
+        "binaryPropertyName": "data"
+      },
+      "name": "Google Drive Download",
+      "type": "n8n-nodes-base.googleDrive",
+      "typeVersion": 1,
+      "position": [450, 150],
+      "credentials": {
+        "googleDriveOAuth2": "Google Drive Account"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "file",
+        "operation": "extract",
+        "binaryPropertyName": "data",
+        "options": {
+          "ocr": true
+        }
+      },
+      "name": "PDF Extract",
+      "type": "n8n-nodes-base.pdfExtract",
+      "typeVersion": 1,
+      "position": [650, 150]
+    },
+    {
+      "parameters": {
+        "values": [
+          {
+            "name": "invoiceText",
+            "value": "={{$node[\"PDF Extract\"].json[\"text\"]}}"
+          },
+          {
+            "name": "databaseType",
+            "value": "postgres"
+          },
+          {
+            "name": "fileName",
+            "value": "={{$node[\"Google Drive Download\"].json[\"name\"]}}"
+          }
+        ]
+      },
+      "name": "Prepare Invoice Prompt",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [850, 150]
+    },
+    {
+      "parameters": {
+        "functionCode": "const text = $json[\"invoiceText\"];\nconst prompt = `Parse the following invoice text into JSON with invoiceNumber, invoiceDate, vendor, currency, total, and lineItems [{description, quantity, unitPrice, amount}]. Return only valid JSON with numeric fields where appropriate.`;\nreturn [{ json: { prompt: prompt + '\n\n' + text } }];"
+      },
+      "name": "Build AI Prompt",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1050, 150]
+    },
+    {
+      "parameters": {
+        "model": "gpt-4o-mini",
+        "temperature": 0,
+        "maxTokens": 1200,
+        "systemPrompt": "You are an invoice data extraction assistant. Extract invoice fields and line items precisely.",
+        "prompt": "={{$json[\"prompt\"]}}",
+        "responseFormat": "json"
+      },
+      "name": "Parse Invoice with AI",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1250, 150],
+      "credentials": {
+        "openAIApi": "OpenAI API Key"
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "const response = $json['response'] || $json['text'] || $json['output'];\nconst parsed = typeof response === 'string' ? JSON.parse(response) : response;\nconst total = parseFloat(parsed.total) || 0;\nconst lineTotal = Array.isArray(parsed.lineItems) ? parsed.lineItems.reduce((sum, item) => sum + (parseFloat(item.amount) || 0), 0) : 0;\nreturn [{ json: { parsedInvoice: parsed, totalsMatch: Math.abs(total - lineTotal) < 0.5, expectedTotal: total, lineTotal, invoiceNumber: parsed.invoiceNumber, vendor: parsed.vendor, invoiceDate: parsed.invoiceDate, currency: parsed.currency || 'USD', lineItems: parsed.lineItems || [] } }];"
+      },
+      "name": "Validate Totals",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1450, 150]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json[\"totalsMatch\"]}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "name": "Totals Match?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1650, 150]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "channel": "#management",
+        "text": "Invoice *{{$json['invoiceNumber']}}* uploaded as {{$json['fileName']}} has a totals mismatch. Invoice total: {{$json['expectedTotal']}} vs line items total: {{$json['lineTotal']}}. Review immediately."
+      },
+      "name": "Alert Management",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 1,
+      "position": [1850, 50],
+      "credentials": {
+        "slackApi": "Slack Account"
+      }
+    },
+    {
+      "parameters": {
+        "resource": "record",
+        "operation": "create",
+        "baseId": "YOUR_AIRTABLE_BASE_ID",
+        "tableId": "Invoices",
+        "fields": [
+          {
+            "field": "Invoice Number",
+            "value": "={{$json['parsedInvoice'].invoiceNumber}}"
+          },
+          {
+            "field": "Vendor",
+            "value": "={{$json['parsedInvoice'].vendor}}"
+          },
+          {
+            "field": "Invoice Date",
+            "value": "={{$json['parsedInvoice'].invoiceDate}}"
+          },
+          {
+            "field": "Total",
+            "value": "={{$json['parsedInvoice'].total}}"
+          },
+          {
+            "field": "Line Items",
+            "value": "={{JSON.stringify($json['parsedInvoice'].lineItems)}}"
+          },
+          {
+            "field": "Status",
+            "value": "={{$json['totalsMatch'] ? 'Matched' : 'Review Needed'}}"
+          }
+        ]
+      },
+      "name": "Create Airtable Record",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 1,
+      "position": [1850, 250],
+      "credentials": {
+        "airtableApi": "Airtable Account"
+      }
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "table": "invoices",
+        "columns": [
+          {
+            "column": "invoice_number",
+            "value": "={{$json['parsedInvoice'].invoiceNumber}}"
+          },
+          {
+            "column": "vendor",
+            "value": "={{$json['parsedInvoice'].vendor}}"
+          },
+          {
+            "column": "invoice_date",
+            "value": "={{$json['parsedInvoice'].invoiceDate}}"
+          },
+          {
+            "column": "currency",
+            "value": "={{$json['parsedInvoice'].currency || 'USD'}}"
+          },
+          {
+            "column": "total_amount",
+            "value": "={{$json['parsedInvoice'].total}}"
+          },
+          {
+            "column": "line_items",
+            "value": "={{JSON.stringify($json['parsedInvoice'].lineItems)}}"
+          },
+          {
+            "column": "status",
+            "value": "={{$json['totalsMatch'] ? 'matched' : 'review_needed'}}"
+          }
+        ],
+        "key": "invoice_number"
+      },
+      "name": "Upsert PostgreSQL Record",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 1,
+      "position": [1850, 450],
+      "credentials": {
+        "postgres": "Postgres Account"
+      }
+    },
+    {
+      "parameters": {
+        "values": [
+          {
+            "name": "databaseType",
+            "value": "postgres"
+          }
+        ]
+      },
+      "name": "Select Database",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 1,
+      "position": [2050, 150]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{$json['databaseType']}}",
+              "operation": "equal",
+              "value2": "postgres"
+            }
+          ]
+        }
+      },
+      "name": "Use PostgreSQL?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [2250, 150]
+    }
+  ],
+  "connections": {
+    "Google Drive Trigger": {
+      "main": [
+        [
+          {
+            "node": "Google Drive Download",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Drive Download": {
+      "main": [
+        [
+          {
+            "node": "PDF Extract",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PDF Extract": {
+      "main": [
+        [
+          {
+            "node": "Prepare Invoice Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Invoice Prompt": {
+      "main": [
+        [
+          {
+            "node": "Build AI Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "Parse Invoice with AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Invoice with AI": {
+      "main": [
+        [
+          {
+            "node": "Validate Totals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Totals": {
+      "main": [
+        [
+          {
+            "node": "Totals Match?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Totals Match?": {
+      "main": [
+        [
+          {
+            "node": "Select Database",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Alert Management",
+            "type": "main",
+            "index": 1
+          },
+          {
+            "node": "Select Database",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Select Database": {
+      "main": [
+        [
+          {
+            "node": "Use PostgreSQL?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Use PostgreSQL?": {
+      "main": [
+        [
+          {
+            "node": "Upsert PostgreSQL Record",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Airtable Record",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "createdAt": "2026-08-09T00:00:00.000Z",
+  "updatedAt": "2026-08-09T00:00:00.000Z"
+}
