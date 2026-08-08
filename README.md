@@ -2,6 +2,16 @@
 
 This repository contains an n8n workflow that triggers when a new invoice PDF is added to Google Drive, performs OCR/AI extraction of line-item data, updates a database record in Airtable or PostgreSQL, and alerts management when invoice totals do not match.
 
+## Screenshots
+
+### Workflow overview
+
+![Invoice PDF Processor workflow overview](screenshots/workflow-overview.png)
+
+### Execution validation
+
+![Invoice validation execution check](screenshots/execution-validation.png)
+
 ## Added workflow
 
 - `invoice-pdf-processor-workflow.json`: n8n workflow export for invoice processing.
@@ -23,6 +33,7 @@ This repository contains an n8n workflow that triggers when a new invoice PDF is
 
 - `invoice-pdf-processor-workflow.json`: Original n8n export.
 - `invoice-pdf-processor-workflow.yaml`: Runnable YAML version for n8n import or version control.
+- `scripts/render-screenshots.js`: Generates the README screenshots from the checked-in workflow export.
 
 ## Behavior
 
@@ -32,3 +43,15 @@ This repository contains an n8n workflow that triggers when a new invoice PDF is
 - Validates whether the invoice total matches the sum of line items.
 - Writes parsed invoice data to PostgreSQL or Airtable.
 - Sends a Slack alert to management when totals do not match.
+
+## Verification
+
+- The workflow JSON parses successfully and all connection targets resolve to existing nodes.
+- The invoice total validation logic was executed locally with sample AI extraction output.
+- Full live execution in n8n requires configured Google Drive, OpenAI, Slack, and PostgreSQL or Airtable credentials.
+
+Regenerate the screenshots with:
+
+```bash
+node scripts/render-screenshots.js
+```
